@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/bookingroomdc/db" VERSION="2026101600" COMMENT="XMLDB file for Booking Room DC">
+  <TABLES>
+    <TABLE NAME="local_bookingroomdc_rooms" COMMENT="Table for storing rooms">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="capacity" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="location" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="1" COMMENT="1: Active, 0: Disabled"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="local_bookingroomdc_bookings" COMMENT="Table for storing room bookings">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="roomid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="eventname" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="capacity" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="timestart" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="timeend" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="description" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="50" NOTNULL="true" DEFAULT="confirmed"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_room" TYPE="foreign" FIELDS="roomid" REFTABLE="local_bookingroomdc_rooms" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="local_bookingroomdc_attendances" COMMENT="Table for storing attendance records">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="bookingid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="0 jika guest/vendor tanpa akun LMS"/>
+        <FIELD NAME="fullname" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="institution" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="role_type" TYPE="char" LENGTH="50" NOTNULL="true" DEFAULT="student" COMMENT="student, observer, superior, vendor, guest"/>
+        <FIELD NAME="checkin_type" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="qr_scan" COMMENT="qr_scan atau manual_add"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_booking" TYPE="foreign" FIELDS="bookingid" REFTABLE="local_bookingroomdc_bookings" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="booking_user_idx" UNIQUE="false" FIELDS="bookingid, userid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
