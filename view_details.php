@@ -1,27 +1,18 @@
 <?php
 require_once(__DIR__ . '/../../config.php');
+require_once(__DIR__ . '/lib.php');
 
 require_login();
 
 $id = required_param('id', PARAM_INT);
 
-// Ambil Data Detail Booking beserta Ruangan, Course, dan Pemesan
-$sql = "SELECT b.*, r.name as roomname, r.location as roomlocation, r.capacity as roomcapacity,
-               c.fullname as coursename, u.firstname, u.lastname, u.email
-          FROM {local_bookingroomdc_bookings} b
-          JOIN {local_bookingroomdc_rooms} r ON r.id = b.roomid
-          JOIN {course} c ON c.id = b.courseid
-          JOIN {user} u ON u.id = b.userid
-         WHERE b.id = :id";
-
-$booking = $DB->get_record_sql($sql, ['id' => $id], MUST_EXIST);
+// Ambil Data Detail Booking via fungsi lib.php
+$booking = local_bookingroomdc_get_booking_detail($id);
 
 $context   = context_system::instance();
 $canmanage = has_capability('local/bookingroomdc:managerooms', $context);
 $isowner   = ($USER->id == $booking->userid);
-
-// Hak akses mengelola presensi manual (Hanya Pembuat Booking atau Admin)
-$canedit = ($isowner || $canmanage);
+$canedit   = ($isowner || $canmanage);
 
 $baseurl = new moodle_url('/local/bookingroomdc/view_details.php', ['id' => $id]);
 
@@ -30,39 +21,13 @@ $PAGE->set_context($context);
 $PAGE->set_title('Dashboard Kegiatan: ' . $booking->eventname);
 $PAGE->set_heading('Dashboard & Presensi Pelatihan');
 
-// PENANGANAN INPUT PESERTA/TAMU MANUAL OLEH PEMBUAT / ADMIN
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_manual_attendance') {
-    require_sesskey();
-
-    if (!$canedit) {
-        redirect($baseurl, 'Anda tidak memiliki izin untuk menambah peserta.', null, \core\output\notification::NOTIFY_ERROR);
-    }
-
-    $fullname    = required_param('fullname', PARAM_TEXT);
-    $institution = optional_param('institution', '', PARAM_TEXT);
-    $role_type   = required_param('role_type', PARAM_ALPHA);
-
-    $attendance = new stdClass();
-    $attendance->bookingid    = $booking->id;
-    $attendance->userid       = 0; // Guest / Vendor / Manual Entry
-    $attendance->fullname     = $fullname;
-    $attendance->institution  = $institution;
-    $attendance->role_type    = $role_type;
-    $attendance->checkin_type = 'manual_add';
-    $attendance->timecreated  = time();
-
-    $DB->insert_record('local_bookingroomdc_attendances', $attendance);
-
-    redirect($baseurl, 'Peserta/Tamu berhasil ditambahkan ke daftar presensi!', null, \core\output\notification::NOTIFY_SUCCESS);
-}
-
 // Generate Token Keamanan QR Code
-$qrtoken = md5($booking->id . $booking->timestart . $CFG->passwordsaltmain);
+$qrtoken = md5($booking->id . $booking->timestart . get_site_identifier());
 $qrurl   = new moodle_url('/local/bookingroomdc/qr.php', ['id' => $booking->id, 'token' => $qrtoken]);
 $scanurl = new moodle_url('/local/bookingroomdc/scan.php', ['id' => $booking->id, 'token' => $qrtoken]);
 
 // Ambil Daftar Presensi Kehadiran
-$attendances = $DB->get_records('local_bookingroomdc_attendances', ['bookingid' => $booking->id], 'timecreated DESC');
+$attendances   = $DB->get_records('local_bookingroomdc_attendances', ['bookingid' => $booking->id], 'timecreated DESC');
 $totalattended = count($attendances);
 
 echo $OUTPUT->header();
@@ -149,16 +114,11 @@ echo $OUTPUT->header();
         </div>
     </div>
 
-    <!-- KIRI / TABEL REKAP PRESENSI & TAMBAH MANUAL -->
+    <!-- KIRI / TABEL REKAP PRESENSI -->
     <div class="col-lg-8 mb-4">
         <div class="card shadow-sm border-0 h-100">
             <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
                 <h5 class="card-title mb-0 font-weight-bold text-dark">Daftar Kehadiran Real-time</h5>
-                <?php if ($canedit): ?>
-                    <button type="button" class="btn btn-sm btn-success font-weight-bold" data-toggle="modal" data-target="#addGuestModal">
-                        + Tambah Peserta / Tamu Manual
-                    </button>
-                <?php endif; ?>
             </div>
             <div class="card-body p-0">
                 <?php if ($attendances): ?>
@@ -168,7 +128,7 @@ echo $OUTPUT->header();
                                 <tr>
                                     <th>Nama Lengkap</th>
                                     <th>Instansi / Divisi</th>
-                                    <th>Ket</th>
+                                    <th>Peran (Role)</th>
                                     <th>Metode Check-in</th>
                                     <th>Waktu Hadir</th>
                                 </tr>
@@ -207,53 +167,6 @@ echo $OUTPUT->header();
         </div>
     </div>
 </div>
-
-<!-- MODAL POPUP: TAMBAH PESERTA / TAMU MANUAL -->
-<?php if ($canedit): ?>
-<div class="modal fade" id="addGuestModal" tabindex="-1" role="dialog" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered" role="document">
-        <div class="modal-content">
-            <form method="post" action="<?php echo $baseurl; ?>">
-                <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
-                <input type="hidden" name="action" value="add_manual_attendance">
-
-                <div class="modal-header bg-success text-white">
-                    <h5 class="modal-title">Tambah Peserta / Tamu Manual</h5>
-                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                </div>
-                <div class="modal-body p-4">
-                    <div class="form-group mb-3">
-                        <label class="font-weight-bold">Nama Lengkap <span class="text-danger">*</span></label>
-                        <input type="text" name="fullname" class="form-control" placeholder="Contoh: Budi Santoso / PT Vendor Akses" required>
-                    </div>
-
-                    <div class="form-group mb-3">
-                        <label class="font-weight-bold">Instansi / Perusahaan / Divisi</label>
-                        <input type="text" name="institution" class="form-control" placeholder="Contoh: PT Mitra Solusi / Divisi HC">
-                    </div>
-
-                    <div class="form-group mb-3">
-                        <label class="font-weight-bold">Peran dalam Kelas <span class="text-danger">*</span></label>
-                        <select name="role_type" class="form-control" required>
-                            <option value="student">Peserta Pelatihan</option>
-                            <option value="observer">Observer / Evaluator</option>
-                            <option value="superior">Atasan / Manajemen</option>
-                            <option value="vendor">Vendor / Pemateri Luar</option>
-                            <option value="guest">Tamu Eksternal</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Batal</button>
-                    <button type="submit" class="btn btn-success font-weight-bold">Simpan Kehadiran</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-<?php endif; ?>
 
 <!-- MODAL LAYAR PENUH PROYEKTOR QR CODE -->
 <div id="fullscreen-qr-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #ffffff; z-index: 9999; text-align: center; padding: 40px;" onclick="toggleFullscreenQR()">
