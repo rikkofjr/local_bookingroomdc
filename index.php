@@ -49,8 +49,8 @@ if ($userbookings) {
         $time = userdate($b->timestart) . ' - ' . userdate($b->timeend);
         $badgeclass = ($b->status === 'confirmed') ? 'badge-success' : 'badge-danger';
         
-        // Link menuju Dashboard Kegiatan (view.php)
-        $viewurl = new moodle_url('/local/bookingroomdc/view.php', ['id' => $b->id]);
+        // Link menuju Dashboard Kegiatan (view_details.php)
+        $viewurl = new moodle_url('/local/bookingroomdc/view_details.php', ['id' => $b->id]);
         
         echo "<tr>
                 <td><a href='{$viewurl}' class='font-weight-bold'>{$b->eventname}</a></td>
