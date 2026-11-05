@@ -14,7 +14,7 @@ function local_bookingroomdc_get_booking_detail($bookingid) {
                    c.fullname as coursename, u.firstname, u.lastname, u.email
               FROM {local_bookingroomdc_bookings} b
               JOIN {local_bookingroomdc_rooms} r ON r.id = b.roomid
-              JOIN {course} c ON c.id = b.courseid
+         LEFT JOIN {course} c ON c.id = b.courseid
               JOIN {user} u ON u.id = b.userid
              WHERE b.id = :id";
 

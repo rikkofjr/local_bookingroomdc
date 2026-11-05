@@ -21,6 +21,11 @@ $PAGE->set_context($context);
 $PAGE->set_title('Dashboard Kegiatan: ' . $booking->eventname);
 $PAGE->set_heading('Dashboard & Presensi Pelatihan');
 
+// Cek apakah kegiatan ini terikat course atau meeting non-course
+$hascourse = !empty($booking->courseid);
+$courselabel = $hascourse ? s($booking->coursename) : '<span class="text-muted font-italic">Meeting / Non-Course (Tanpa LMS)</span>';
+$courseurl   = $hascourse ? new moodle_url('/course/view.php', ['id' => $booking->courseid]) : '#';
+
 // Generate Token Keamanan QR Code
 $qrtoken = md5($booking->id . $booking->timestart . get_site_identifier());
 $qrurl   = new moodle_url('/local/bookingroomdc/qr.php', ['id' => $booking->id, 'token' => $qrtoken]);
@@ -41,7 +46,12 @@ echo $OUTPUT->header();
                 <span class="badge badge-primary px-3 py-2 mb-2"><?php echo s($booking->status); ?></span>
                 <h2 class="font-weight-bold text-dark mb-1"><?php echo s($booking->eventname); ?></h2>
                 <p class="text-muted mb-2">
-                    Course LMS: <a href="<?php echo new moodle_url('/course/view.php', ['id' => $booking->courseid]); ?>" target="_blank" class="font-weight-bold"><?php echo s($booking->coursename); ?></a>
+                    Course LMS: 
+                    <?php if ($hascourse): ?>
+                        <a href="<?php echo $courseurl; ?>" target="_blank" class="font-weight-bold"><?php echo $courselabel; ?></a>
+                    <?php else: ?>
+                        <?php echo $courselabel; ?>
+                    <?php endif; ?>
                 </p>
             </div>
             <div>
@@ -65,8 +75,8 @@ echo $OUTPUT->header();
                 <strong><?php echo s($booking->firstname . ' ' . $booking->lastname); ?></strong>
             </div>
             <div class="col-md-3 mb-2">
-                <small class="text-muted d-block">Kapasitas vs Kehadiran</small>
-                <strong class="text-primary font-weight-bold"><?php echo $totalattended; ?> / <?php echo $booking->capacity; ?> Orang</strong>
+                <small class="text-muted d-block">Kehadiran</small>
+                <strong class="text-primary font-weight-bold"><?php echo $totalattended; ?> Orang</strong>
             </div>
         </div>
     </div>
@@ -127,8 +137,8 @@ echo $OUTPUT->header();
                             <thead class="thead-light">
                                 <tr>
                                     <th>Nama Lengkap</th>
-                                    <th>Instansi / Divisi</th>
-                                    <th>Peran (Role)</th>
+                                    <th>Instansi</th>
+                                    <th>Peran dikelas</th>
                                     <th>Metode Check-in</th>
                                     <th>Waktu Hadir</th>
                                 </tr>

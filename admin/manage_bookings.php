@@ -67,16 +67,16 @@ $wheresql = implode(" AND ", $where);
 $countsql = "SELECT COUNT(b.id) 
                FROM {local_bookingroomdc_bookings} b
                JOIN {local_bookingroomdc_rooms} r ON r.id = b.roomid
-               JOIN {course} c ON c.id = b.courseid
+          LEFT JOIN {course} c ON c.id = b.courseid
                JOIN {user} u ON u.id = b.userid
               WHERE {$wheresql}";
 
 $totalcount = $DB->count_records_sql($countsql, $params);
 
-$selectsql = "SELECT b.*, r.name as roomname, c.fullname as coursename, u.firstname, u.lastname 
+$selectsql = "SELECT b.*, r.name as roomname, c.id as realcourseid, c.fullname as coursename, u.firstname, u.lastname 
                 FROM {local_bookingroomdc_bookings} b
                 JOIN {local_bookingroomdc_rooms} r ON r.id = b.roomid
-                JOIN {course} c ON c.id = b.courseid
+           LEFT JOIN {course} c ON c.id = b.courseid
                 JOIN {user} u ON u.id = b.userid
                WHERE {$wheresql}
             ORDER BY b.timestart DESC";
@@ -106,8 +106,8 @@ $allrooms = $DB->get_records_menu('local_bookingroomdc_rooms', null, 'name ASC',
             <div class="form-group mr-2 mb-2">
                 <select name="status" class="form-control">
                     <option value="">-- Semua Status --</option>
-                    <option value="confirmed" <?php echo ($status === 'confirmed') ? 'selected' : ''; ?>>Confirmed</option>
-                    <option value="cancelled" <?php echo ($status === 'cancelled') ? 'selected' : ''; ?>>Cancelled</option>
+                    <option value="confirmed" <?php echo ($status === 'confirmed') ? 'selected' : ''; ?>>confirmed</option>
+                    <option value="cancelled" <?php echo ($status === 'cancelled') ? 'selected' : ''; ?>>Cancel</option>
                 </select>
             </div>
 
@@ -128,7 +128,8 @@ $allrooms = $DB->get_records_menu('local_bookingroomdc_rooms', null, 'name ASC',
                             <th>Kegiatan</th>
                             <th>Ruangan</th>
                             <th>Course LMS</th>
-                            <th>Pemesan</th>
+                            <th>Nama</th>
+                            <th>Penempatan</th>
                             <th>Waktu</th>
                             <th class="text-center">Status</th>
                             <th class="text-center">Aksi</th>
@@ -139,25 +140,35 @@ $allrooms = $DB->get_records_menu('local_bookingroomdc_rooms', null, 'name ASC',
                             $startstr = userdate($b->timestart, '%d %b %Y, %H:%M');
                             $endstr   = userdate($b->timeend, '%d %b %Y, %H:%M');
 
-                            $time = $startstr . '<br><small class="text-muted">s/d ' . $endstr . '</small>';                            $cancelurl = new moodle_url('/local/bookingroomdc/admin/manage_bookings.php', [
+                            $time = $startstr . '<br><small class="text-muted">s/d ' . $endstr . '</small>';                            
+                            
+                            $cancelurl = new moodle_url('/local/bookingroomdc/admin/manage_bookings.php', [
                                 'action'  => 'cancel',
                                 'id'      => $b->id,
                                 'sesskey' => sesskey()
                             ]);
 
-                            $courseurl = new moodle_url('/course/view.php', ['id' => $b->courseid]);
+                            // Cek apakah ada course atau meeting non-course
+                            if (!empty($b->realcourseid) && !empty($b->coursename)) {
+                                $courseurl  = new moodle_url('/course/view.php', ['id' => $b->realcourseid]);
+                                $courselabel = "<a href='{$courseurl}' target='_blank'>" . s($b->coursename) . "</a>";
+                            } else {
+                                $courselabel = "<span class='text-muted font-italic'>Meeting / Non-Course</span>";
+                            }
+
                             $userurl   = new moodle_url('/user/view.php', ['id' => $b->userid]);
 
                             $badgeclass = ($b->status === 'confirmed') ? 'badge-success' : 'badge-danger';
                             $btn = ($b->status === 'confirmed') 
-                                ? "<a href='{$cancelurl}' class='btn btn-sm btn-outline-danger' onclick='return confirm(\"Yakin ingin membatalkan booking ini?\")'>Batalkan</a>" 
+                                ? "<a title='Batalkan' href='{$cancelurl}' class='btn btn-sm btn-outline-danger' onclick='return confirm(\"Yakin ingin membatalkan booking ini?\")'>❌</a>" 
                                 : "-";
                         ?>
                             <tr>
-                                <td class="font-weight-bold"><?php echo s($b->eventname); ?></td>
+                                <td class="font-weight-bold"><a href="/local/bookingroomdc/view_details.php?id=<?php echo s($b->id); ?>"><?php echo s($b->eventname); ?></a></td>
                                 <td><?php echo s($b->roomname); ?></td>
-                                <td><a href="<?php echo $courseurl; ?>" target="_blank"><?php echo s($b->coursename); ?></a></td>
-                                <td><a href="<?php echo $userurl; ?>" target="_blank"><?php echo s($b->firstname . ' ' . $b->lastname); ?></a></td>
+                                <td><?php echo $courselabel; ?></td>
+                                <td><a href="<?php echo $userurl; ?>" target="_blank"><?php echo s($b->firstname); ?></a></td>
+                                <td><a href="<?php echo $userurl; ?>" target="_blank"><?php echo s($b->lastname); ?></a></td>
                                 <td><?php echo $time; ?></td>
                                 <td class="text-center"><span class="badge badge-pill <?php echo $badgeclass; ?> px-3 py-2"><?php echo s($b->status); ?></span></td>
                                 <td class="text-center"><?php echo $btn; ?></td>

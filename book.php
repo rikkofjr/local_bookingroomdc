@@ -4,7 +4,10 @@ require_once(__DIR__ . '/classes/helper.php');
 
 require_login();
 $context = context_system::instance();
+
+// Cek apakah user memiliki kapabilitas untuk melakukan booking (dan mengelola/booking atas nama orang lain)
 require_capability('local/bookingroomdc:bookroom', $context);
+$canmanage = has_capability('local/bookingroomdc:managerooms', $context);
 
 $PAGE->set_url(new moodle_url('/local/bookingroomdc/book.php'));
 $PAGE->set_context($context);
@@ -16,12 +19,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     require_sesskey();
 
     $eventname   = required_param('eventname', PARAM_TEXT);
-    $courseid    = required_param('courseid', PARAM_INT);
+    $bookingtype = required_param('bookingtype', PARAM_ALPHA); // 'training' atau 'meeting'
+    $courseid    = ($bookingtype === 'training') ? required_param('courseid', PARAM_INT) : 0;
     $capacity    = required_param('capacity', PARAM_INT);
     $roomid      = required_param('roomid', PARAM_INT);
     $timestart   = required_param('timestart', PARAM_TEXT);
     $timeend     = required_param('timeend', PARAM_TEXT);
     $description = optional_param('description', '', PARAM_CLEANHTML);
+
+    // Penentuan userid (jika manager dan memilih user lain, gunakan user tersebut. Jika tidak, gunakan $USER->id)
+    $targetuserid = $USER->id;
+    if ($canmanage) {
+        $targetuserid = optional_param('targetuserid', $USER->id, PARAM_INT);
+    }
 
     $tstart = strtotime($timestart);
     $tend   = strtotime($timeend);
@@ -33,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         redirect(new moodle_url('/local/bookingroomdc/book.php'), 'Waktu mulai dan waktu selesai harus pada tanggal yang sama.', null, \core\output\notification::NOTIFY_ERROR);
     }
 
-    // Validasi Ulang Server-Side
+    // Validasi Ulang Server-Side Ketersediaan Ruangan
     $rooms = \local_bookingroomdc\helper::get_rooms_with_availability($capacity, $tstart, $tend);
     if (!isset($rooms[$roomid]) || !$rooms[$roomid]->available) {
         redirect(new moodle_url('/local/bookingroomdc/book.php'), 'Maaf, ruangan yang Anda pilih tidak tersedia atau bentrok.', null, \core\output\notification::NOTIFY_ERROR);
@@ -41,8 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     $booking = new stdClass();
     $booking->roomid      = $roomid;
-    $booking->userid      = $USER->id;
-    $booking->courseid    = $courseid;
+    $booking->userid      = $targetuserid; // Menyimpan ID penanggung jawab/pemesan terpilih
+    $booking->courseid    = $courseid;     // 0 jika meeting/non-course
     $booking->eventname   = $eventname;
     $booking->capacity    = $capacity;
     $booking->timestart   = $tstart;
@@ -59,10 +69,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // Ambil Seluruh Course Aktif untuk Autocomplete Dropdown
 $courses = $DB->get_records_menu('course', ['visible' => 1], 'fullname ASC', 'id, fullname');
 
+// Jika punya hak akses manage, ambil daftar user aktif untuk fitur "Booking atas nama orang lain"
+$usersmenu = [];
+if ($canmanage) {
+    // Mengambil user aktif selain guest
+    $users = $DB->get_records_select('user', 'deleted = 0 AND suspended = 0 AND id > 1', null, 'lastname ASC, firstname ASC', 'id, firstname, lastname, email');
+    foreach ($users as $u) {
+        $usersmenu[$u->id] = fullname($u) . ' (' . $u->email . ')';
+    }
+}
+
 echo $OUTPUT->header();
 ?>
 
-<!-- Load Select2 CSS & JS via CDN untuk Autocomplete Search Course -->
+<!-- Load Select2 CSS & JS via CDN untuk Autocomplete Search Course & User -->
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 
@@ -76,19 +96,52 @@ echo $OUTPUT->header();
             <input type="hidden" name="action" value="save_booking">
             <input type="hidden" name="roomid" id="selected_room_id" value="" required>
 
-            <!-- 1. Nama Kegiatan -->
+            <?php if ($canmanage): ?>
+                <!-- KONDISI 1: Opsi Pilih Pemesan (On-Behalf Booking) khusus Manager/Admin -->
+                <div class="form-group row bg-light p-3 border rounded mb-4">
+                    <label class="col-md-3 col-form-label font-weight-bold text-primary">Atas Nama Pemesan</label>
+                    <div class="col-md-9">
+                        <select class="form-control select2-search" name="targetuserid" style="width: 100%;">
+                            <option value="<?php echo $USER->id; ?>">Diri Sendiri (<?php echo fullname($USER); ?>)</option>
+                            <?php foreach ($usersmenu as $uid => $uname): ?>
+                                <?php if ($uid != $USER->id): ?>
+                                    <option value="<?php echo $uid; ?>"><?php echo s($uname); ?></option>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="form-text text-muted">Manager/Admin dapat memilih karyawan lain sebagai penanggung jawab ruangan.</small>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- 1. Tipe Kegiatan (Training vs Meeting) -->
             <div class="form-group row">
-                <label class="col-md-3 col-form-label font-weight-bold">Nama Kegiatan <span class="text-danger">*</span></label>
-                <div class="col-md-9">
-                    <input type="text" class="form-control" name="eventname" placeholder="Contoh: Pembelajaran MDP Section Head 2026-01" required>
+                <label class="col-md-3 col-form-label font-weight-bold">Tipe Kegiatan <span class="text-danger">*</span></label>
+                <div class="col-md-9 d-flex align-items-center">
+                    <div class="custom-control custom-radio mr-4">
+                        <input type="radio" id="type_training" name="bookingtype" value="training" class="custom-control-input" checked onchange="toggleBookingType()">
+                        <label class="custom-control-label font-weight-bold" for="type_training">Training (Terikat Course LMS)</label>
+                    </div>
+                    <div class="custom-control custom-radio">
+                        <input type="radio" id="type_meeting" name="bookingtype" value="meeting" class="custom-control-input" onchange="toggleBookingType()">
+                        <label class="custom-control-label font-weight-bold" for="type_meeting">Meeting / Umum (Tanpa Course)</label>
+                    </div>
                 </div>
             </div>
 
-            <!-- 2. Course LMS (Searchable Autocomplete Dropdown) -->
+            <!-- 2. Nama Kegiatan -->
             <div class="form-group row">
+                <label class="col-md-3 col-form-label font-weight-bold">Nama Kegiatan <span class="text-danger">*</span></label>
+                <div class="col-md-9">
+                    <input type="text" class="form-control" name="eventname" placeholder="Contoh: Rapat Koordinasi Bulanan / Pembelajaran MDP" required>
+                </div>
+            </div>
+
+            <!-- 3. Course LMS (Hanya muncul jika tipe kegiatan = training) -->
+            <div class="form-group row" id="course-selection-group">
                 <label class="col-md-3 col-form-label font-weight-bold">Course LMS Terkait <span class="text-danger">*</span></label>
                 <div class="col-md-9">
-                    <select class="form-control select2-search" name="courseid" style="width: 100%;" required>
+                    <select class="form-control select2-search" name="courseid" id="input_courseid" style="width: 100%;">
                         <option value="">-- Cari atau Pilih Course --</option>
                         <?php foreach ($courses as $cid => $cname): ?>
                             <option value="<?php echo $cid; ?>"><?php echo s($cname); ?></option>
@@ -97,7 +150,7 @@ echo $OUTPUT->header();
                 </div>
             </div>
 
-            <!-- 3. Kapasitas Peserta -->
+            <!-- 4. Kapasitas Peserta -->
             <div class="form-group row">
                 <label class="col-md-3 col-form-label font-weight-bold">Jumlah Kapasitas Peserta <span class="text-danger">*</span></label>
                 <div class="col-md-9">
@@ -105,7 +158,7 @@ echo $OUTPUT->header();
                 </div>
             </div>
 
-            <!-- 4. Waktu Mulai & Selesai (Native HTML5 Datetime Input) -->
+            <!-- 5. Waktu Mulai & Selesai -->
             <div class="form-group row">
                 <label class="col-md-3 col-form-label font-weight-bold">Waktu Mulai <span class="text-danger">*</span></label>
                 <div class="col-md-9">
@@ -120,7 +173,7 @@ echo $OUTPUT->header();
                 </div>
             </div>
 
-            <!-- 5. Detail Keterangan (Textarea) -->
+            <!-- 6. Detail Keterangan -->
             <div class="form-group row">
                 <label class="col-md-3 col-form-label font-weight-bold">Detail Keterangan</label>
                 <div class="col-md-9">
@@ -130,7 +183,7 @@ echo $OUTPUT->header();
 
             <hr class="my-4">
 
-            <!-- 6. TOMBOL CEK KETERSEDIAAN RUANGAN -->
+            <!-- 7. TOMBOL CEK KETERSEDIAAN RUANGAN -->
             <div class="form-group row">
                 <div class="col-md-3"></div>
                 <div class="col-md-9">
@@ -141,7 +194,7 @@ echo $OUTPUT->header();
                 </div>
             </div>
 
-            <!-- 7. SEKSI CARD PILIHAN RUANGAN -->
+            <!-- 8. SEKSI CARD PILIHAN RUANGAN -->
             <div class="form-group row my-4" id="room-selection-container" style="display: none;">
                 <label class="col-md-3 col-form-label font-weight-bold">Pilih Ruangan <span class="text-danger">*</span></label>
                 <div class="col-md-9" id="room-cards-wrapper">
@@ -178,10 +231,10 @@ echo $OUTPUT->header();
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
-    // Inisialisasi Autocomplete Search pada Dropdown Course dengan Select2
+    // Inisialisasi Select2
     if (typeof jQuery !== 'undefined' && jQuery.fn.select2) {
         jQuery('.select2-search').select2({
-            placeholder: "-- Cari nama course LMS --",
+            placeholder: "-- Pilih opsi --",
             allowClear: true
         });
     }
@@ -219,12 +272,11 @@ document.addEventListener("DOMContentLoaded", function() {
             return;
         }
 
-        // Pengecekan Tanggal Sama (YYYY-MM-DD)
         var startDateStr = timestart.split('T')[0];
         var endDateStr   = timeend.split('T')[0];
 
         if (startDateStr !== endDateStr) {
-            statusMsg.innerHTML = '<span class="text-danger font-weight-bold"><i class="fa fa-exclamation-circle"></i> Waktu Mulai dan Waktu Selesai harus berada ditanggal yang sama (tidak boleh beda hari).</span>';
+            statusMsg.innerHTML = '<span class="text-danger font-weight-bold"><i class="fa fa-exclamation-circle"></i> Waktu Mulai dan Waktu Selesai harus berada di tanggal yang sama.</span>';
             container.style.display = "none";
             btnSubmit.disabled = true;
             return;
@@ -302,11 +354,29 @@ document.addEventListener("DOMContentLoaded", function() {
     });
 });
 
+// Fungsi untuk menyembunyikan/menampilkan pilihan course berdasarkan jenis kegiatan
+function toggleBookingType() {
+    var isTraining = document.getElementById('type_training').checked;
+    var courseGroup = document.getElementById('course-selection-group');
+    var courseSelect = document.getElementById('input_courseid');
+
+    if (isTraining) {
+        courseGroup.style.display = 'flex';
+        courseSelect.setAttribute('required', 'required');
+    } else {
+        courseGroup.style.display = 'none';
+        courseSelect.removeAttribute('required');
+        courseSelect.value = ''; // Reset nilai
+        if (jQuery && jQuery.fn.select2) {
+            jQuery(courseSelect).val('').trigger('change');
+        }
+    }
+}
+
 function selectRoom(roomId) {
     document.getElementById("selected_room_id").value = roomId;
     document.getElementById("btn-submit-booking").disabled = false;
 
-    // Highlight Card yang dipilih
     document.querySelectorAll('.room-card-item').forEach(function(el) {
         el.classList.remove('selected-card');
     });

@@ -21,7 +21,7 @@ $lastdayofmonth  = mktime(23, 59, 59, $month, (int)date('t', $firstdayofmonth), 
 $sql = "SELECT b.*, r.name as roomname, r.location as roomlocation, c.fullname as coursename, u.firstname, u.lastname
           FROM {local_bookingroomdc_bookings} b
           JOIN {local_bookingroomdc_rooms} r ON r.id = b.roomid
-          JOIN {course} c ON c.id = b.courseid
+     LEFT JOIN {course} c ON c.id = b.courseid
           JOIN {user} u ON u.id = b.userid
          WHERE b.status = 'confirmed'
            AND b.timestart <= :endmonth AND b.timeend >= :startmonth

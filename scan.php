@@ -8,14 +8,17 @@ $mode  = optional_param('mode', '', PARAM_ALPHA);
 
 $booking = local_bookingroomdc_get_booking_detail($id);
 
+$errormessage = '';
+
 // 1. Validasi Token QR
 if (!local_bookingroomdc_validate_qr_token($booking->id, $booking->timestart, $token)) {
-    print_error('invalidtoken', 'local_bookingroomdc', '', 'Token tautan presensi tidak valid atau telah kadaluwarsa.');
+    $errormessage = 'Token tautan presensi tidak valid atau telah kadaluwarsa.';
 }
+
 // 2. Validasi Wajib di Hari yang Sama (Same-day check)
-if (!local_bookingroomdc_is_same_day($booking->timestart)) {
+if (empty($errormessage) && !local_bookingroomdc_is_same_day($booking->timestart)) {
     $datakegiatan = userdate($booking->timestart, '%d %B %Y');
-    print_error('nottheseday', 'local_bookingroomdc', '', "Presensi untuk kegiatan ini hanya dapat dilakukan pada hari pelaksanaan, yaitu tanggal {$datakegiatan}.");
+    $errormessage = "Presensi untuk kegiatan ini hanya dapat dilakukan pada hari pelaksanaan, yaitu tanggal {$datakegiatan}.";
 }
 
 $context = context_system::instance();
@@ -26,13 +29,12 @@ $PAGE->set_heading('Form Presensi Pelatihan');
 
 $isloggedin = isloggedin() && !isguestuser();
 
-// JIKA SUDAH LOGIN LMS DAN BELUM MEMILIH MODE TAMU, OTOMATIS SET KE MODE INTERNAL
 if ($isloggedin && empty($mode)) {
     $mode = 'internal';
 }
 
-// PENANGANAN SUBMIT PRESENSI
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'submit_presence') {
+// PENANGANAN SUBMIT PRESENSI (Hanya jika tidak ada error)
+if (empty($errormessage) && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'submit_presence') {
     require_sesskey();
 
     $submissionmode = required_param('submissionmode', PARAM_ALPHA);
@@ -41,8 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (!$isloggedin) {
             redirect($PAGE->url, 'Sesi login Anda berakhir. Silakan login kembali.', null, \core\output\notification::NOTIFY_ERROR);
         }
-        $fullname    = fullname($USER);
-        $institution = $USER->department ?: ($USER->institution ?: 'Internal LMS');
+        $fullname    = $USER->firstname;
+        $institution = !empty($USER->lastname) ? $USER->lastname : 'Internal';
         $userid      = $USER->id;
     } else {
         $fullname    = required_param('fullname', PARAM_TEXT);
@@ -52,7 +54,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     $role_type = required_param('role_type', PARAM_ALPHA);
 
-    // Simpan presensi via fungsi helper di lib.php
     $result = local_bookingroomdc_add_attendance($booking->id, $userid, $fullname, $institution, $role_type, 'qr_scan');
 
     if ($result === false) {
@@ -76,15 +77,23 @@ echo $OUTPUT->header();
             </div>
             <div class="card-body p-4">
 
-                <?php if (empty($mode)): ?>
-                    <!-- TAMPILAN PILIHAN UTAMA (Hanya muncul jika BELUM login) -->
+                <?php if (!empty($errormessage)): ?>
+                    <!-- TAMPILAN JIKA ADA ERROR (Token salah / Beda hari) -->
+                    <div class="alert alert-danger text-center py-4">
+                        <h4 class="alert-heading font-weight-bold">Akses Ditolak</h4>
+                        <p class="mb-0"><?php echo s($errormessage); ?></p>
+                    </div>
+                    <div class="text-center mt-3">
+                        <a href="<?php echo new moodle_url('/index.php'); ?>" class="btn btn-secondary">Kembali ke Home</a>
+                    </div>
+
+                <?php elseif (empty($mode)): ?>
+                    <!-- TAMPILAN PILIHAN UTAMA -->
                     <div class="text-center py-3">
                         <h5 class="font-weight-bold text-dark mb-4">Anda hadir sebagai siapa?</h5>
                         
                         <?php 
                             $scanurl      = new moodle_url('/local/bookingroomdc/scan.php', ['id' => $id, 'token' => $token, 'mode' => 'internal']);
-                            
-                            // Jika belum login, arahkan ke form login Moodle dan bawa URL tujuan (wantsurl)
                             if (!$isloggedin) {
                                 $internallink = new moodle_url('/login/index.php', ['wantsurl' => $scanurl->out_as_local_url(false)]);
                             } else {
@@ -100,7 +109,6 @@ echo $OUTPUT->header();
                                 </a>
                             </div>
                             <div class="col">
-                                <!-- Tombol 2: Tamu / Vendor -->
                                 <a href="<?php echo new moodle_url('/local/bookingroomdc/scan.php', ['id' => $id, 'token' => $token, 'mode' => 'guest']); ?>" class="btn btn-outline-secondary btn-lg btn-block py-3 font-weight-bold shadow-sm">
                                     <i class="fa fa-solid fa-person-chalkboard"></i><br/>
                                     Tamu / Vendor
@@ -111,7 +119,7 @@ echo $OUTPUT->header();
                     </div>
 
                 <?php elseif ($mode === 'internal'): ?>
-                    <!-- FORM KHUSUS KARYAWAN INTERNAL (Otomatis dilempar kesini jika sudah login) -->
+                    <!-- FORM KARYAWAN INTERNAL -->
                     <div class="alert alert-info mb-3">
                         <strong>Status: Karyawan Internal</strong><br>
                         Masuk sebagai: <strong><?php echo fullname($USER); ?></strong> (<?php echo s($USER->email); ?>)
@@ -138,7 +146,7 @@ echo $OUTPUT->header();
                     </form>
 
                 <?php elseif ($mode === 'guest'): ?>
-                    <!-- FORM KHUSUS TAMU / VENDOR -->
+                    <!-- FORM TAMU / VENDOR -->
                     <form method="post" action="<?php echo $PAGE->url; ?>">
                         <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
                         <input type="hidden" name="action" value="submit_presence">

@@ -30,6 +30,23 @@ function xmldb_local_bookingroomdc_upgrade($oldversion) {
 
         upgrade_plugin_savepoint(true, 2026101600, 'local', 'bookingroomdc');
     }
+    if ($oldversion < 2026110101) {
+
+        // Mendefinisikan tabel dan field courseid yang akan diubah
+        $table = new xmldb_table('local_bookingroomdc_bookings');
+        
+        // Perbaikan: Ubah XMLDB_NOTNULL_FALSE menjadi false
+        $field = new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, false, null, '0', 'userid');
+
+        // Jika field sudah ada, ubah, jika belum buat
+        if ($dbman->field_exists($table, $field)) {
+            $dbman->change_field_notnull($table, $field);
+            $dbman->change_field_default($table, $field);
+        }
+
+        // Simpan titik upgrade plugin ke versi 2026110100
+        upgrade_plugin_savepoint(true, 2026110101, 'local', 'bookingroomdc');
+    }
 
     return true;
 }
