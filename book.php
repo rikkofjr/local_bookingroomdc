@@ -1,6 +1,7 @@
 <?php
 require_once(__DIR__ . '/../../config.php');
 require_once(__DIR__ . '/classes/helper.php');
+require_once(__DIR__ . '/lib.php');
 
 require_login();
 $context = context_system::instance();
@@ -21,6 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $eventname   = required_param('eventname', PARAM_TEXT);
     $bookingtype = required_param('bookingtype', PARAM_ALPHA); // 'training' atau 'meeting'
     $courseid    = ($bookingtype === 'training') ? required_param('courseid', PARAM_INT) : 0;
+    $groupid     = ($bookingtype === 'training') ? optional_param('groupid', 0, PARAM_INT) : 0;
     $capacity    = required_param('capacity', PARAM_INT);
     $roomid      = required_param('roomid', PARAM_INT);
     $timestart   = required_param('timestart', PARAM_TEXT);
@@ -53,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $booking->roomid      = $roomid;
     $booking->userid      = $targetuserid; // Menyimpan ID penanggung jawab/pemesan terpilih
     $booking->courseid    = $courseid;     // 0 jika meeting/non-course
+    $booking->groupid      = $groupid;      // 0 jika tanpa group
     $booking->eventname   = $eventname;
     $booking->capacity    = $capacity;
     $booking->timestart   = $tstart;
@@ -61,7 +64,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $booking->status      = 'confirmed';
     $booking->timecreated = time();
 
-    $DB->insert_record('local_bookingroomdc_bookings', $booking);
+    $newid = $DB->insert_record('local_bookingroomdc_bookings', $booking);
+    $booking->id = (int)$newid;
+    //insert log
+    $event = \local_bookingroomdc\event\booking_created::create([
+        'context'  => $context,
+        'objectid' => $booking->id,
+        'other'    => [
+            'roomid'       => $booking->roomid,
+            'targetuserid' => $booking->userid,
+            'courseid'     => $booking->courseid,
+            'groupid'      => $booking->groupid,
+            'eventname'    => $booking->eventname,
+        ],
+    ]);
+    $event->trigger();
+
+    local_bookingroomdc_sync_booking_calendar($booking);
 
     redirect(new moodle_url('/local/bookingroomdc/calendar.php'), 'Booking Ruangan Berhasil Disimpan!', null, \core\output\notification::NOTIFY_SUCCESS);
 }
@@ -141,12 +160,23 @@ echo $OUTPUT->header();
             <div class="form-group row" id="course-selection-group">
                 <label class="col-md-3 col-form-label font-weight-bold">Course LMS Terkait <span class="text-danger">*</span></label>
                 <div class="col-md-9">
-                    <select class="form-control select2-search" name="courseid" id="input_courseid" style="width: 100%;">
+                    <select class="form-control select2-search" name="courseid" id="input_courseid" style="width: 100%;" required>
                         <option value="">-- Cari atau Pilih Course --</option>
                         <?php foreach ($courses as $cid => $cname): ?>
                             <option value="<?php echo $cid; ?>"><?php echo s($cname); ?></option>
                         <?php endforeach; ?>
                     </select>
+                </div>
+            </div>
+
+            <!-- 3b. Group Course (Muncul setelah Course dipilih pada tipe Training) -->
+            <div class="form-group row" id="group-selection-group" style="display: none;">
+                <label class="col-md-3 col-form-label font-weight-bold">Group Course (Opsional)</label>
+                <div class="col-md-9">
+                    <select class="form-control select2-search" name="groupid" id="input_groupid" style="width: 100%;">
+                        <option value="0">-- Tanpa Group --</option>
+                    </select>
+                    <small class="form-text text-muted">Jika dipilih, event kalender Moodle akan dikirim ke PIC dan seluruh anggota group ini.</small>
                 </div>
             </div>
 
@@ -236,6 +266,15 @@ document.addEventListener("DOMContentLoaded", function() {
         jQuery('.select2-search').select2({
             placeholder: "-- Pilih opsi --",
             allowClear: true
+        });
+
+        // Muat daftar group setiap kali course dipilih/diubah
+        jQuery('#input_courseid').on('change', function() {
+            loadGroupsByCourse(this.value);
+        });
+    } else {
+        document.getElementById('input_courseid').addEventListener('change', function() {
+            loadGroupsByCourse(this.value);
         });
     }
 
@@ -354,21 +393,65 @@ document.addEventListener("DOMContentLoaded", function() {
     });
 });
 
-// Fungsi untuk menyembunyikan/menampilkan pilihan course berdasarkan jenis kegiatan
+function loadGroupsByCourse(courseId) {
+    var groupRow = document.getElementById('group-selection-group');
+    var groupSelect = document.getElementById('input_groupid');
+    var isTraining = document.getElementById('type_training').checked;
+
+    if (!isTraining || !courseId || parseInt(courseId, 10) <= 0) {
+        groupRow.style.display = 'none';
+        groupSelect.innerHTML = '<option value="0">-</option>';
+        if (typeof jQuery !== 'undefined' && jQuery.fn.select2) {
+            jQuery(groupSelect).val('0').trigger('change');
+        }
+        return;
+    }
+
+    groupRow.style.display = 'flex';
+    groupSelect.innerHTML = '<option value="0">Memuat daftar group...</option>';
+
+    fetch(M.cfg.wwwroot + '/local/bookingroomdc/get_groups.php?courseid=' + encodeURIComponent(courseId))
+        .then(function(res) { return res.json(); })
+        .then(function(items) {
+            var opts = '<option value="0">-</option>';
+            if (Array.isArray(items)) {
+                items.forEach(function(g) {
+                    opts += '<option value="' + g.id + '">' + g.name + '</option>';
+                });
+            }
+            groupSelect.innerHTML = opts;
+            if (typeof jQuery !== 'undefined' && jQuery.fn.select2) {
+                jQuery(groupSelect).val('0').trigger('change');
+            }
+        })
+        .catch(function() {
+            groupSelect.innerHTML = '<option value="0">-</option>';
+        });
+}
+
+// Fungsi untuk menyembunyikan/menampilkan pilihan course & group berdasarkan jenis kegiatan
 function toggleBookingType() {
     var isTraining = document.getElementById('type_training').checked;
     var courseGroup = document.getElementById('course-selection-group');
     var courseSelect = document.getElementById('input_courseid');
+    var groupRow = document.getElementById('group-selection-group');
+    var groupSelect = document.getElementById('input_groupid');
 
     if (isTraining) {
         courseGroup.style.display = 'flex';
         courseSelect.setAttribute('required', 'required');
+        if (courseSelect.value) {
+            loadGroupsByCourse(courseSelect.value);
+        }
     } else {
         courseGroup.style.display = 'none';
         courseSelect.removeAttribute('required');
-        courseSelect.value = ''; // Reset nilai
-        if (jQuery && jQuery.fn.select2) {
+        courseSelect.value = '';
+        groupRow.style.display = 'none';
+        groupSelect.innerHTML = '<option value="0">-</option>';
+        if (typeof jQuery !== 'undefined' && jQuery.fn.select2) {
             jQuery(courseSelect).val('').trigger('change');
+            jQuery(groupSelect).val('0').trigger('change');
         }
     }
 }

@@ -16,6 +16,41 @@ $canedit   = ($isowner || $canmanage);
 
 $baseurl = new moodle_url('/local/bookingroomdc/view_details.php', ['id' => $id]);
 
+// Jika booking ruangan dicancel maka pada event juga akan dihapus
+$action = optional_param('action', '', PARAM_ALPHA);
+
+if ($action === 'cancel' && $booking->status === 'confirmed') {
+    require_sesskey();
+
+    if (!$canedit) {
+        throw new required_capability_exception($context, 'local/bookingroomdc:managerooms', 'nopermissions', '');
+    }
+
+    $upd = (object)[
+        'id'     => (int)$booking->id,
+        'status' => 'cancelled',
+    ];
+    $DB->update_record('local_bookingroomdc_bookings', $upd);
+
+    //insert log
+    $event = \local_bookingroomdc\event\booking_cancelled::create([
+        'context'  => $context,
+        'objectid' => $booking->id,
+        'other'    => [
+            'roomid'   => $booking->roomid,
+            'courseid' => $booking->courseid,
+            'groupid'  => $booking->groupid,
+        ],
+    ]);
+    $event->trigger();
+
+    // Hapus seluruh event kalender Moodle (PIC + anggota group).
+    local_bookingroomdc_delete_booking_calendar((int)$booking->id);
+
+    redirect($baseurl, 'Booking berhasil dibatalkan dan jadwal kalender terkait telah dihapus.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+//
+
 $PAGE->set_url($baseurl);
 $PAGE->set_context($context);
 $PAGE->set_title('Dashboard Kegiatan: ' . $booking->eventname);
@@ -35,12 +70,19 @@ $scanurl = new moodle_url('/local/bookingroomdc/scan.php', ['id' => $booking->id
 $attendances   = $DB->get_records('local_bookingroomdc_attendances', ['bookingid' => $booking->id], 'timecreated DESC');
 $totalattended = count($attendances);
 
+//Link untuk menuju pembatalan booking
+$cancelurl = new moodle_url('/local/bookingroomdc/view_details.php', [
+    'id'      => $booking->id,
+    'action'  => 'cancel',
+    'sesskey' => sesskey(),
+]);
+
 echo $OUTPUT->header();
 ?>
 
 <!-- HEADER DASHBOARD KEGIATAN -->
 <div class="card shadow-sm border-0 mb-4">
-    <div class="card-body p-4">
+    <div class="card-body p-4">    
         <div class="d-flex justify-content-between align-items-start flex-wrap">
             <div>
                 <span class="badge badge-primary px-3 py-2 mb-2"><?php echo s($booking->status); ?></span>
@@ -54,8 +96,15 @@ echo $OUTPUT->header();
                     <?php endif; ?>
                 </p>
             </div>
-            <div>
-                <a href="<?php echo new moodle_url('/local/bookingroomdc/index.php'); ?>" class="btn btn-outline-secondary">Kembali ke Booking Saya</a>
+            <div class="d-flex align-items-center flex-wrap" style="gap: 8px;">
+                <?php if ($canedit && $booking->status === 'confirmed'): ?>
+                    <a href="<?php echo new moodle_url('/local/bookingroomdc/index.php'); ?>" class="btn btn-outline-secondary">Kembali ke Booking Saya</a>
+                    <a href="<?php echo $cancelurl; ?>"
+                       class="btn btn-outline-danger font-weight-bold"
+                       onclick="return confirm('Yakin ingin membatalkan booking ini? Jadwal di kalender Moodle PIC dan anggota group juga akan dihapus.');">
+                        Batalkan Booking
+                    </a>
+                <?php endif; ?>
             </div>
         </div>
         <hr>
@@ -71,7 +120,7 @@ echo $OUTPUT->header();
                 <small class="d-block text-muted"><?php echo userdate($booking->timestart, '%H:%M'); ?> - <?php echo userdate($booking->timeend, '%H:%M WIB'); ?></small>
             </div>
             <div class="col-md-3 mb-2">
-                <small class="text-muted d-block">Pemesan / Pemohon</small>
+                <small class="text-muted d-block">PIC</small>
                 <strong><?php echo s($booking->firstname . ' ' . $booking->lastname); ?></strong>
             </div>
             <div class="col-md-3 mb-2">
@@ -84,6 +133,7 @@ echo $OUTPUT->header();
 
 <div class="row">
     <!-- KANAN / KIOS QR CODE PRESENSI -->
+     
     <div class="col-lg-4 mb-4">
         <div class="card shadow-sm border-0 h-100">
             <div class="card-header bg-primary text-white text-center py-3">

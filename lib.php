@@ -1,5 +1,6 @@
 <?php
 defined('MOODLE_INTERNAL') || die();
+require_once($CFG->dirroot . '/calendar/lib.php');
 
 /**
  * Mengambil data detail booking beserta informasi ruangan, course, dan pemesan.
@@ -83,4 +84,126 @@ function local_bookingroomdc_is_same_day($timestart) {
     $today       = date('Y-m-d', time());
 
     return ($bookingdate === $today);
+}
+/**
+ * Menyinkronkan event kalender Moodle untuk PIC booking dan seluruh anggota group (jika ada).
+ *
+ * @param stdClass $booking
+ * @return void
+ */
+function local_bookingroomdc_sync_booking_calendar(stdClass $booking): void {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot . '/calendar/lib.php');
+
+    // Bersihkan event lama terlebih dahulu agar tidak terjadi duplikasi saat edit/reschedule.
+    local_bookingroomdc_delete_booking_calendar((int)$booking->id);
+
+    if (isset($booking->status) && $booking->status !== 'confirmed') {
+        return;
+    }
+
+    $targetuserids = [];
+    if (!empty($booking->userid)) {
+        $targetuserids[(int)$booking->userid] = (int)$booking->userid;
+    }
+
+    // Ambil anggota group jika booking terikat ke course dan group tertentu.
+    if (!empty($booking->courseid) && !empty($booking->groupid)) {
+        $members = $DB->get_records('groups_members', ['groupid' => (int)$booking->groupid], '', 'id, userid');
+        foreach ($members as $member) {
+            if (!empty($member->userid)) {
+                $targetuserids[(int)$member->userid] = (int)$member->userid;
+            }
+        }
+    }
+
+    if (empty($targetuserids)) {
+        return;
+    }
+
+    $room = $DB->get_record('local_bookingroomdc_rooms', ['id' => (int)$booking->roomid], 'id, name, location');
+    $roomname = $room ? format_string($room->name) : 'Ruangan DC';
+
+    $picname = '-';
+    if (!empty($booking->userid)) {
+        $picuser = $DB->get_record('user', ['id' => (int)$booking->userid], 'id, firstname, lastname, firstnamephonetic, lastnamephonetic, middlename, alternatename');
+        if ($picuser) {
+            $picname = fullname($picuser);
+        }
+    }
+
+    $duration = max(0, (int)$booking->timeend - (int)$booking->timestart);
+
+    $descparts = [
+        'Kegiatan: ' . s($booking->eventname),
+        'Ruangan: ' . s($roomname),
+        'PIC: ' . s($picname),
+    ];
+    $descriptionhtml = implode('<br>', $descparts);
+
+    $now = time();
+
+    foreach ($targetuserids as $uid) {
+        $eventdata = (object)[
+            'name'         => $booking->eventname . ' — ' . ($room ? $room->name : 'Room DC'),
+            'description'  => [
+                'text'   => $descriptionhtml,
+                'format' => FORMAT_HTML,
+            ],
+            'eventtype'    => 'user',
+            'userid'       => $uid,
+            'courseid'     => 0,
+            'groupid'      => 0,
+            'modulename'   => '',
+            'instance'     => 0,
+            'timestart'    => (int)$booking->timestart,
+            'timeduration' => $duration,
+            'visible'      => 1,
+        ];
+
+        try {
+            $calendarevent = \calendar_event::create($eventdata, false);
+            if (!empty($calendarevent->id)) {
+                $DB->insert_record('local_bookingroomdc_cal_events', (object)[
+                    'bookingid'   => (int)$booking->id,
+                    'userid'      => $uid,
+                    'eventid'     => (int)$calendarevent->id,
+                    'timecreated' => $now,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            debugging('Gagal membuat calendar event booking #' . $booking->id . ' untuk user #' . $uid . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+        }
+    }
+}
+
+/**
+ * Menghapus seluruh event kalender Moodle yang terhubung dengan booking tertentu.
+ *
+ * @param int $bookingid
+ * @return void
+ */
+function local_bookingroomdc_delete_booking_calendar(int $bookingid): void {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot . '/calendar/lib.php');
+
+    $mappings = $DB->get_records('local_bookingroomdc_cal_events', ['bookingid' => $bookingid]);
+    if (!$mappings) {
+        return;
+    }
+
+    foreach ($mappings as $map) {
+        try {
+            if ($DB->record_exists('event', ['id' => $map->eventid])) {
+                $event = \calendar_event::load($map->eventid);
+                $event->delete(true);
+            }
+        } catch (\Throwable $e) {
+            debugging('Gagal menghapus calendar event #' . $map->eventid . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+        }
+    }
+
+    $DB->delete_records('local_bookingroomdc_cal_events', ['bookingid' => $bookingid]);
 }
